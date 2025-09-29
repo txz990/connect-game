@@ -364,25 +364,29 @@ class ConnectGame {
         const gameBoard = document.getElementById('gameBoard');
         const gameBoardRect = gameBoard.getBoundingClientRect();
 
-        // 清除之前的动画线条
-        const existingLines = document.querySelectorAll('.connection-line');
+        // 清除之前的动画
+        const existingLines = document.querySelectorAll('.connection-line, .connection-canvas');
         existingLines.forEach(line => line.remove());
 
         // 清除旧的动画容器
         const oldContainers = document.querySelectorAll('.animation-container');
         oldContainers.forEach(container => container.remove());
 
-        // 创建动画容器，相对于整个页面定位
-        const animationContainer = document.createElement('div');
-        animationContainer.className = 'animation-container';
-        animationContainer.style.position = 'fixed';
-        animationContainer.style.top = '0';
-        animationContainer.style.left = '0';
-        animationContainer.style.width = '100vw';
-        animationContainer.style.height = '100vh';
-        animationContainer.style.pointerEvents = 'none';
-        animationContainer.style.zIndex = '1000';
-        document.body.appendChild(animationContainer);
+        // 创建Canvas来绘制连续路径
+        const canvas = document.createElement('canvas');
+        canvas.className = 'connection-canvas';
+        canvas.style.position = 'fixed';
+        canvas.style.top = '0';
+        canvas.style.left = '0';
+        canvas.style.width = '100vw';
+        canvas.style.height = '100vh';
+        canvas.style.pointerEvents = 'none';
+        canvas.style.zIndex = '1000';
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+        document.body.appendChild(canvas);
+
+        const ctx = canvas.getContext('2d');
 
         // 计算方块的实际大小和间距 (60px方块 + 2px间距)
         const blockSize = 60;
@@ -412,101 +416,104 @@ class ConnectGame {
             return { x: screenX, y: screenY };
         };
 
-        // 为每段路径创建线条，使用实际的路径
-        for (let i = 0; i < path.length - 1; i++) {
-            const start = path[i];
-            const end = path[i + 1];
+        // 将路径转换为屏幕坐标
+        const screenPath = path.map(point => getScreenCoord(point.x, point.y));
 
-            const line = document.createElement('div');
-            line.className = 'connection-line';
+        console.log('屏幕路径:', screenPath);
 
-            const startCoord = getScreenCoord(start.x, start.y);
-            const endCoord = getScreenCoord(end.x, end.y);
+        // 绘制连续路径的函数
+        const drawPath = (progress) => {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-            console.log(`线段 ${i}: (${start.x}, ${start.y}) -> (${end.x}, ${end.y})`);
-            console.log(`屏幕坐标: (${startCoord.x}, ${startCoord.y}) -> (${endCoord.x}, ${endCoord.y})`);
-
-            // 计算线条属性
-            const deltaX = endCoord.x - startCoord.x;
-            const deltaY = endCoord.y - startCoord.y;
-            const length = Math.sqrt(deltaX * deltaX + deltaY * deltaY);
-            const angle = Math.atan2(deltaY, deltaX) * 180 / Math.PI;
+            if (progress <= 0) return;
 
             // 设置线条样式
-            line.style.position = 'absolute';
-            line.style.left = startCoord.x + 'px';
-            line.style.top = (startCoord.y - 4) + 'px'; // 减去线条高度的一半以居中
-            line.style.width = length + 'px';
-            line.style.height = '8px';
-            line.style.background = 'linear-gradient(90deg, #fd79a8, #fdcb6e, #fd79a8)';
-            line.style.transform = `rotate(${angle}deg)`;
-            line.style.transformOrigin = '0 50%';
-            line.style.borderRadius = '4px';
-            line.style.boxShadow = '0 0 15px rgba(253, 121, 168, 0.8)';
-            line.style.border = '2px solid #fff';
+            ctx.strokeStyle = '#fd79a8';
+            ctx.lineWidth = 8;
+            ctx.lineCap = 'round';
+            ctx.lineJoin = 'round';
+            ctx.shadowColor = 'rgba(253, 121, 168, 0.8)';
+            ctx.shadowBlur = 15;
 
-            // 使用CSS动画而不是延迟，让所有线段同时出现
-            line.style.animation = 'connectionAppear 0.4s ease-in-out forwards';
+            // 计算总路径长度
+            let totalLength = 0;
+            const segmentLengths = [];
+            for (let i = 0; i < screenPath.length - 1; i++) {
+                const dx = screenPath[i + 1].x - screenPath[i].x;
+                const dy = screenPath[i + 1].y - screenPath[i].y;
+                const length = Math.sqrt(dx * dx + dy * dy);
+                segmentLengths.push(length);
+                totalLength += length;
+            }
 
-            animationContainer.appendChild(line);
-        }
+            // 根据进度计算应该绘制到哪里
+            const targetLength = totalLength * progress;
+            let currentLength = 0;
 
-        // 添加连线出现动画的CSS
-        if (!document.getElementById('connectionAnimationStyle')) {
-            const style = document.createElement('style');
-            style.id = 'connectionAnimationStyle';
-            style.textContent = `
-                @keyframes connectionAppear {
-                    0% {
-                        opacity: 0;
-                        transform: scale(0);
-                        filter: brightness(2);
-                    }
-                    50% {
-                        opacity: 1;
-                        transform: scale(1.1);
-                        filter: brightness(1.5);
-                    }
-                    100% {
-                        opacity: 1;
-                        transform: scale(1);
-                        filter: brightness(1);
-                    }
+            ctx.beginPath();
+            ctx.moveTo(screenPath[0].x, screenPath[0].y);
+
+            for (let i = 0; i < segmentLengths.length; i++) {
+                const segmentLength = segmentLengths[i];
+
+                if (currentLength + segmentLength <= targetLength) {
+                    // 完整绘制这一段
+                    ctx.lineTo(screenPath[i + 1].x, screenPath[i + 1].y);
+                } else if (currentLength < targetLength) {
+                    // 部分绘制这一段
+                    const partialProgress = (targetLength - currentLength) / segmentLength;
+                    const startX = screenPath[i].x;
+                    const startY = screenPath[i].y;
+                    const endX = screenPath[i + 1].x;
+                    const endY = screenPath[i + 1].y;
+
+                    const partialX = startX + (endX - startX) * partialProgress;
+                    const partialY = startY + (endY - startY) * partialProgress;
+
+                    ctx.lineTo(partialX, partialY);
+                    break;
                 }
 
-                @keyframes connectionFadeOut {
-                    0% {
-                        opacity: 1;
-                        transform: scale(1);
-                    }
-                    100% {
-                        opacity: 0;
-                        transform: scale(0.8);
-                    }
-                }
+                currentLength += segmentLength;
+            }
 
-                .connection-line {
-                    opacity: 0;
-                }
-            `;
-            document.head.appendChild(style);
-        }
+            ctx.stroke();
+        };
 
-        // 0.5秒后开始淡出动画
-        this.animationTimeout = setTimeout(() => {
-            const lines = animationContainer.querySelectorAll('.connection-line');
-            lines.forEach(line => {
-                line.style.animation = 'connectionFadeOut 0.2s ease-in-out forwards';
-            });
+        // 动画参数 - 短时间动画，不阻塞操作
+        let startTime = Date.now();
+        const animationDuration = 200; // 0.2秒绘制
+        const holdDuration = 300; // 0.3秒保持
+        const fadeOutDuration = 200; // 0.2秒淡出，总计0.7秒
 
-            // 再0.2秒后清除容器
-            setTimeout(() => {
-                if (animationContainer && animationContainer.parentNode) {
-                    animationContainer.remove();
+        const animate = () => {
+            const elapsed = Date.now() - startTime;
+
+            if (elapsed < animationDuration) {
+                // 绘制阶段
+                const progress = elapsed / animationDuration;
+                drawPath(progress);
+                requestAnimationFrame(animate);
+            } else if (elapsed < animationDuration + holdDuration) {
+                // 保持显示阶段
+                drawPath(1);
+                requestAnimationFrame(animate);
+            } else if (elapsed < animationDuration + holdDuration + fadeOutDuration) {
+                // 淡出阶段 - 与方块消失同时进行
+                const fadeProgress = 1 - (elapsed - animationDuration - holdDuration) / fadeOutDuration;
+                canvas.style.opacity = fadeProgress;
+                drawPath(1);
+                requestAnimationFrame(animate);
+            } else {
+                // 动画结束，清理Canvas
+                if (canvas && canvas.parentNode) {
+                    canvas.remove();
                 }
-                this.animationTimeout = null;
-            }, 200);
-        }, 500);
+            }
+        };
+
+        // 开始动画
+        requestAnimationFrame(animate);
     }
 
     clearSelection() {
