@@ -98,25 +98,43 @@ class ConnectGame {
 
     renderBoard() {
         const gameBoard = document.getElementById('gameBoard');
+
+        // 保存正在播放动画的元素，但只保留对应位置在board中已经为0的元素
+        const animatingElements = gameBoard.querySelectorAll('.match-success');
+        const animatingData = Array.from(animatingElements).map(el => ({
+            element: el,
+            x: parseInt(el.dataset.x),
+            y: parseInt(el.dataset.y)
+        })).filter(data => this.board[data.y][data.x] === 0); // 只保留逻辑上已删除的方块的动画
+
         gameBoard.innerHTML = '';
 
         for (let y = 0; y < this.boardSize; y++) {
             for (let x = 0; x < this.boardSize; x++) {
-                const block = document.createElement('div');
-                block.className = 'block';
-                block.dataset.x = x;
-                block.dataset.y = y;
+                // 检查是否有正在播放动画的元素在这个位置
+                const animatingElement = animatingData.find(data => data.x === x && data.y === y);
 
-                const blockType = this.board[y][x];
-                if (blockType === 0) {
-                    block.classList.add('empty');
+                if (animatingElement) {
+                    // 如果有正在播放动画的元素，重新添加到游戏板
+                    gameBoard.appendChild(animatingElement.element);
                 } else {
-                    block.classList.add(`type-${blockType}`);
-                    block.textContent = this.blockTypes[blockType - 1];
-                    block.addEventListener('click', () => this.onBlockClick(x, y));
-                }
+                    // 正常渲染方块
+                    const block = document.createElement('div');
+                    block.className = 'block';
+                    block.dataset.x = x;
+                    block.dataset.y = y;
 
-                gameBoard.appendChild(block);
+                    const blockType = this.board[y][x];
+                    if (blockType === 0) {
+                        block.classList.add('empty');
+                    } else {
+                        block.classList.add(`type-${blockType}`);
+                        block.textContent = this.blockTypes[blockType - 1];
+                        block.addEventListener('click', () => this.onBlockClick(x, y));
+                    }
+
+                    gameBoard.appendChild(block);
+                }
             }
         }
     }
@@ -174,17 +192,44 @@ class ConnectGame {
         console.log('找到的路径:', path);
 
         if (path) {
-            // 立即消除方块和更新状态，不等待动画
+            // 获取方块元素并添加消失动画
+            const block1Element = document.querySelector(`[data-x="${block1.x}"][data-y="${block1.y}"]`);
+            const block2Element = document.querySelector(`[data-x="${block2.x}"][data-y="${block2.y}"]`);
+
+            if (block1Element && block2Element) {
+                block1Element.classList.add('match-success');
+                block2Element.classList.add('match-success');
+
+                // 监听动画结束事件，动画完成后替换为空方块
+                const handleAnimationEnd = (event) => {
+                    const element = event.target;
+                    const x = parseInt(element.dataset.x);
+                    const y = parseInt(element.dataset.y);
+
+                    // 创建空方块替换动画方块
+                    const emptyBlock = document.createElement('div');
+                    emptyBlock.className = 'block empty';
+                    emptyBlock.dataset.x = x;
+                    emptyBlock.dataset.y = y;
+
+                    // 替换元素
+                    element.parentNode.replaceChild(emptyBlock, element);
+                };
+
+                block1Element.addEventListener('animationend', handleAnimationEnd);
+                block2Element.addEventListener('animationend', handleAnimationEnd);
+            }
+
+            // 立即从游戏逻辑中移除（但DOM元素还在，只是在播放消失动画）
             this.board[block1.y][block1.x] = 0;
             this.board[block2.y][block2.x] = 0;
             this.score += 10;
 
-            // 显示连线动画（不阻塞操作）
+            // 显示连线动画
             this.showConnectionAnimation(path);
 
-            // 立即更新界面和重置状态
+            // 立即更新界面和重置状态，但不重新渲染整个棋盘
             this.clearSelection();
-            this.renderBoard();
             this.updateHUD();
             this.isProcessingMatch = false;
 
@@ -397,20 +442,23 @@ class ConnectGame {
         const getScreenCoord = (x, y) => {
             let screenX, screenY;
 
+            // 游戏板的实际内容区域：border(3px) + padding(15px) = 18px偏移
+            const boardContentOffset = 18;
+
             if (x < 0) {
                 screenX = gameBoardRect.left - 15;
             } else if (x >= this.boardSize) {
-                screenX = gameBoardRect.left + 15 + this.boardSize * cellSize + 15;
+                screenX = gameBoardRect.left + boardContentOffset + this.boardSize * cellSize + 15;
             } else {
-                screenX = gameBoardRect.left + 15 + x * cellSize + blockSize / 2;
+                screenX = gameBoardRect.left + boardContentOffset + x * cellSize + blockSize / 2;
             }
 
             if (y < 0) {
                 screenY = gameBoardRect.top - 15;
             } else if (y >= this.boardSize) {
-                screenY = gameBoardRect.top + 15 + this.boardSize * cellSize + 15;
+                screenY = gameBoardRect.top + boardContentOffset + this.boardSize * cellSize + 15;
             } else {
-                screenY = gameBoardRect.top + 15 + y * cellSize + blockSize / 2;
+                screenY = gameBoardRect.top + boardContentOffset + y * cellSize + blockSize / 2;
             }
 
             return { x: screenX, y: screenY };
@@ -480,11 +528,11 @@ class ConnectGame {
             ctx.stroke();
         };
 
-        // 动画参数 - 短时间动画，不阻塞操作
+        // 动画参数 - 快速动画，在物品消失前完成
         let startTime = Date.now();
-        const animationDuration = 200; // 0.2秒绘制
-        const holdDuration = 300; // 0.3秒保持
-        const fadeOutDuration = 200; // 0.2秒淡出，总计0.7秒
+        const animationDuration = 100; // 0.15秒绘制
+        const holdDuration = 70; // 0.1秒保持
+        const fadeOutDuration = 70; // 0.1秒淡出，总计0.35秒
 
         const animate = () => {
             const elapsed = Date.now() - startTime;
