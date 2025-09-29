@@ -9,6 +9,7 @@ class ConnectGame {
         this.timer = null;
         this.blockTypes = ['🔴', '⭐', '💖', '💎', '🔺', '🌸', '🦋', '💠'];
         this.animationTimeout = null;
+        this.isProcessingMatch = false; // 防止快速点击导致的重复处理
 
         this.initEventListeners();
     }
@@ -36,6 +37,7 @@ class ConnectGame {
         this.score = 0;
         this.timeLeft = 300;
         this.selectedBlocks = [];
+        this.isProcessingMatch = false; // 重置处理状态
 
         document.getElementById('menu').classList.add('hidden');
         document.getElementById('game').classList.remove('hidden');
@@ -120,7 +122,7 @@ class ConnectGame {
     }
 
     onBlockClick(x, y) {
-        if (this.gameState !== 'playing') return;
+        if (this.gameState !== 'playing' || this.isProcessingMatch) return;
 
         const blockType = this.board[y][x];
         if (blockType === 0) return;
@@ -147,71 +149,67 @@ class ConnectGame {
 
         // 如果选中了两个方块，尝试匹配
         if (this.selectedBlocks.length === 2) {
-            setTimeout(() => this.tryMatch(), 100);
+            this.isProcessingMatch = true;
+            setTimeout(() => this.tryMatch(), 50); // 减少延迟
         }
     }
 
     tryMatch() {
-        if (this.selectedBlocks.length !== 2) return;
+        if (this.selectedBlocks.length !== 2) {
+            this.isProcessingMatch = false;
+            return;
+        }
 
         const [block1, block2] = this.selectedBlocks;
 
         // 检查类型是否相同
         if (block1.type !== block2.type) {
             this.clearSelection();
+            this.isProcessingMatch = false;
             return;
         }
 
         // 检查路径是否可达
         const path = this.findPath(block1.x, block1.y, block2.x, block2.y);
-        console.log('找到的路径:', path); // 调试日志
+        console.log('找到的路径:', path);
 
         if (path) {
-            // 添加成功匹配动画
-            const block1Element = document.querySelector(`[data-x="${block1.x}"][data-y="${block1.y}"]`);
-            const block2Element = document.querySelector(`[data-x="${block2.x}"][data-y="${block2.y}"]`);
+            // 立即消除方块和更新状态，不等待动画
+            this.board[block1.y][block1.x] = 0;
+            this.board[block2.y][block2.x] = 0;
+            this.score += 10;
 
-            block1Element.classList.add('match-success');
-            block2Element.classList.add('match-success');
-
-            // 显示连线动画
+            // 显示连线动画（不阻塞操作）
             this.showConnectionAnimation(path);
 
-            // 延迟消除方块，让动画先显示
-            setTimeout(() => {
-                // 消除方块
-                this.board[block1.y][block1.x] = 0;
-                this.board[block2.y][block2.x] = 0;
+            // 立即更新界面和重置状态
+            this.clearSelection();
+            this.renderBoard();
+            this.updateHUD();
+            this.isProcessingMatch = false;
 
-                // 增加分数
-                this.score += 10;
-
-                this.clearSelection();
-                this.renderBoard();
-                this.updateHUD();
-
-                // 检查游戏是否结束
-                if (this.isGameWon()) {
-                    this.endGame(true);
-                } else if (!this.hasPossibleMoves()) {
-                    this.endGame(false);
-                }
-            }, 600); // 等待匹配动画完成
+            // 检查游戏是否结束
+            if (this.isGameWon()) {
+                this.endGame(true);
+            } else if (!this.hasPossibleMoves()) {
+                this.endGame(false);
+            }
         } else {
             // 添加失败效果
             this.selectedBlocks.forEach(block => {
                 const element = document.querySelector(`[data-x="${block.x}"][data-y="${block.y}"]`);
                 if (element) {
-                    element.style.animation = 'shake 0.5s ease-in-out';
+                    element.style.animation = 'shake 0.3s ease-in-out';
                     setTimeout(() => {
                         element.style.animation = '';
-                    }, 500);
+                    }, 300);
                 }
             });
 
             setTimeout(() => {
                 this.clearSelection();
-            }, 500);
+                this.isProcessingMatch = false;
+            }, 300);
         }
     }
 
@@ -350,11 +348,17 @@ class ConnectGame {
     }
 
     showConnectionAnimation(path) {
-        console.log('显示连线动画:', path); // 调试日志
+        console.log('显示连线动画:', path);
 
         if (!path || path.length < 2) {
             console.log('路径无效，取消动画');
             return;
+        }
+
+        // 如果有正在进行的动画，先清除
+        if (this.animationTimeout) {
+            clearTimeout(this.animationTimeout);
+            this.animationTimeout = null;
         }
 
         const gameBoard = document.getElementById('gameBoard');
@@ -364,8 +368,13 @@ class ConnectGame {
         const existingLines = document.querySelectorAll('.connection-line');
         existingLines.forEach(line => line.remove());
 
+        // 清除旧的动画容器
+        const oldContainers = document.querySelectorAll('.animation-container');
+        oldContainers.forEach(container => container.remove());
+
         // 创建动画容器，相对于整个页面定位
         const animationContainer = document.createElement('div');
+        animationContainer.className = 'animation-container';
         animationContainer.style.position = 'fixed';
         animationContainer.style.top = '0';
         animationContainer.style.left = '0';
@@ -375,7 +384,35 @@ class ConnectGame {
         animationContainer.style.zIndex = '1000';
         document.body.appendChild(animationContainer);
 
-        // 为每段路径创建线条
+        // 计算方块的实际大小和间距 (60px方块 + 2px间距)
+        const blockSize = 60;
+        const gap = 2;
+        const cellSize = blockSize + gap;
+
+        // 辅助函数：获取屏幕坐标
+        const getScreenCoord = (x, y) => {
+            let screenX, screenY;
+
+            if (x < 0) {
+                screenX = gameBoardRect.left - 15;
+            } else if (x >= this.boardSize) {
+                screenX = gameBoardRect.left + 15 + this.boardSize * cellSize + 15;
+            } else {
+                screenX = gameBoardRect.left + 15 + x * cellSize + blockSize / 2;
+            }
+
+            if (y < 0) {
+                screenY = gameBoardRect.top - 15;
+            } else if (y >= this.boardSize) {
+                screenY = gameBoardRect.top + 15 + this.boardSize * cellSize + 15;
+            } else {
+                screenY = gameBoardRect.top + 15 + y * cellSize + blockSize / 2;
+            }
+
+            return { x: screenX, y: screenY };
+        };
+
+        // 为每段路径创建线条，使用实际的路径
         for (let i = 0; i < path.length - 1; i++) {
             const start = path[i];
             const end = path[i + 1];
@@ -383,56 +420,22 @@ class ConnectGame {
             const line = document.createElement('div');
             line.className = 'connection-line';
 
-            // 计算方块在游戏面板中的相对位置
-            let startX, startY, endX, endY;
-
-            // 处理起始点 - 相对于页面的绝对位置
-            if (start.x < 0) {
-                startX = gameBoardRect.left - 15; // 左边界外
-            } else if (start.x >= this.boardSize) {
-                startX = gameBoardRect.left + this.boardSize * 62 + 15; // 右边界外
-            } else {
-                startX = gameBoardRect.left + start.x * 62 + 31; // 正常位置
-            }
-
-            if (start.y < 0) {
-                startY = gameBoardRect.top - 15; // 上边界外
-            } else if (start.y >= this.boardSize) {
-                startY = gameBoardRect.top + this.boardSize * 62 + 15; // 下边界外
-            } else {
-                startY = gameBoardRect.top + start.y * 62 + 31; // 正常位置
-            }
-
-            // 处理结束点
-            if (end.x < 0) {
-                endX = gameBoardRect.left - 15;
-            } else if (end.x >= this.boardSize) {
-                endX = gameBoardRect.left + this.boardSize * 62 + 15;
-            } else {
-                endX = gameBoardRect.left + end.x * 62 + 31;
-            }
-
-            if (end.y < 0) {
-                endY = gameBoardRect.top - 15;
-            } else if (end.y >= this.boardSize) {
-                endY = gameBoardRect.top + this.boardSize * 62 + 15;
-            } else {
-                endY = gameBoardRect.top + end.y * 62 + 31;
-            }
+            const startCoord = getScreenCoord(start.x, start.y);
+            const endCoord = getScreenCoord(end.x, end.y);
 
             console.log(`线段 ${i}: (${start.x}, ${start.y}) -> (${end.x}, ${end.y})`);
-            console.log(`屏幕坐标: (${startX}, ${startY}) -> (${endX}, ${endY})`);
+            console.log(`屏幕坐标: (${startCoord.x}, ${startCoord.y}) -> (${endCoord.x}, ${endCoord.y})`);
 
             // 计算线条属性
-            const deltaX = endX - startX;
-            const deltaY = endY - startY;
+            const deltaX = endCoord.x - startCoord.x;
+            const deltaY = endCoord.y - startCoord.y;
             const length = Math.sqrt(deltaX * deltaX + deltaY * deltaY);
             const angle = Math.atan2(deltaY, deltaX) * 180 / Math.PI;
 
             // 设置线条样式
             line.style.position = 'absolute';
-            line.style.left = startX + 'px';
-            line.style.top = startY + 'px';
+            line.style.left = startCoord.x + 'px';
+            line.style.top = (startCoord.y - 4) + 'px'; // 减去线条高度的一半以居中
             line.style.width = length + 'px';
             line.style.height = '8px';
             line.style.background = 'linear-gradient(90deg, #fd79a8, #fdcb6e, #fd79a8)';
@@ -442,9 +445,8 @@ class ConnectGame {
             line.style.boxShadow = '0 0 15px rgba(253, 121, 168, 0.8)';
             line.style.border = '2px solid #fff';
 
-            // 添加动画延迟
-            line.style.animationDelay = (i * 0.2) + 's';
-            line.style.animation = 'connectionAppear 0.6s ease-in-out forwards';
+            // 使用CSS动画而不是延迟，让所有线段同时出现
+            line.style.animation = 'connectionAppear 0.4s ease-in-out forwards';
 
             animationContainer.appendChild(line);
         }
@@ -457,18 +459,29 @@ class ConnectGame {
                 @keyframes connectionAppear {
                     0% {
                         opacity: 0;
-                        transform: scale(0) rotate(var(--rotation, 0deg));
+                        transform: scale(0);
                         filter: brightness(2);
                     }
                     50% {
                         opacity: 1;
-                        transform: scale(1.2) rotate(var(--rotation, 0deg));
+                        transform: scale(1.1);
                         filter: brightness(1.5);
                     }
                     100% {
                         opacity: 1;
-                        transform: scale(1) rotate(var(--rotation, 0deg));
+                        transform: scale(1);
                         filter: brightness(1);
+                    }
+                }
+
+                @keyframes connectionFadeOut {
+                    0% {
+                        opacity: 1;
+                        transform: scale(1);
+                    }
+                    100% {
+                        opacity: 0;
+                        transform: scale(0.8);
                     }
                 }
 
@@ -479,12 +492,21 @@ class ConnectGame {
             document.head.appendChild(style);
         }
 
-        // 2秒后清除动画
-        setTimeout(() => {
-            if (animationContainer && animationContainer.parentNode) {
-                animationContainer.remove();
-            }
-        }, 2000);
+        // 0.5秒后开始淡出动画
+        this.animationTimeout = setTimeout(() => {
+            const lines = animationContainer.querySelectorAll('.connection-line');
+            lines.forEach(line => {
+                line.style.animation = 'connectionFadeOut 0.2s ease-in-out forwards';
+            });
+
+            // 再0.2秒后清除容器
+            setTimeout(() => {
+                if (animationContainer && animationContainer.parentNode) {
+                    animationContainer.remove();
+                }
+                this.animationTimeout = null;
+            }, 200);
+        }, 500);
     }
 
     clearSelection() {
